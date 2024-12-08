@@ -3,3 +3,4 @@ legacy-backend/node_modules
 legacy-backend/.env
 .fleet/
 .idea/
+target/
