@@ -56,16 +56,3 @@ async fn main() -> std::io::Result<()> {
         .run()
         .await
 }
-
-// #[actix_web::main]
-// async fn main() -> std::io::Result<()> {
-//     println!("Server starting on port 4242...");
-//
-//     HttpServer::new(|| {
-//         App::new()
-//             .service(web::resource("/test").route(web::get().to(test_endpoint)))
-//     })
-//         .bind(("127.0.0.1", 4242))?
-//         .run()
-//         .await
-// }
