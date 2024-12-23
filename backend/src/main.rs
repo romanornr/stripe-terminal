@@ -106,15 +106,25 @@ async fn create_payment_intent_handler(
 //====================================================== //
 //   Endpoint to get 10 most recentPaymentIntent (GET)   //
 //=====================================================  //
-
 // Get /get-recent-payment-intents
 async fn get_payment_intent_handler(data: web::Data<Appstate>) -> impl Responder {
     let mut params = ListPaymentIntents::new();
     params.limit = Some(10);
-    
+
     match PaymentIntent::list(&data.stripe_client, &params).await {
         Ok(payment_intents) => ApiResponse::success(payment_intents),
         Err(err) => ErrorResponse::new(&format!("Failed to list payment intents: {}", err), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
+    }
+}
+
+//==========================================//
+//         Endpoint to get location ID      //
+//==========================================//
+// GET /get-location-id
+async fn get_location_id_handler()-> impl  Responder {
+    match env::var("LOCATION_ID") {
+        Ok(location_id) => ApiResponse::success(serde_json::json!({ "location_id": location_id })),
+        Err(_) => ErrorResponse::new("Failed to load location ID", actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 
@@ -160,6 +170,7 @@ println!("Server starting on port 4242...");
             // register routes
             .route("/test", web::get().to(test_endpoint))
             .route("/create-payment-intent", web::post().to(create_payment_intent_handler))
+            .route("/get-location-id", web::get().to(get_location_id_handler))
             .route("/get-recent-payment-intents", web::get().to(get_payment_intent_handler))
     })
         .bind(("127.0.0.1", 4242))?
