@@ -4,7 +4,7 @@ use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
-use stripe::{Client as StripeClient, CreatePaymentIntent, Currency, ListPaymentIntents, PaymentIntent, PaymentIntentCaptureMethod};
+use stripe::{Client as StripeClient, Client, CreatePaymentIntent, Currency, ListPaymentIntents, PaymentIntent, PaymentIntentCaptureMethod, TerminalReader, StripeError, CreateTerminalConnectionToken, TerminalConnectionToken};
 
 //======================//
 //   Shared App State   //
@@ -94,7 +94,7 @@ async fn create_payment_intent_handler(
     };
     // Prepare PaymentIntent creation parameters
     let mut create_params = CreatePaymentIntent::new(req.amount, currency_enum); 
-    create_params.payment_method_types = Some(vec!["card".to_string()]);
+    create_params.payment_method_types = Some(vec!["card_present".to_string()]);
     create_params.capture_method = Some(PaymentIntentCaptureMethod::Automatic);
     
     match PaymentIntent::create(&data.stripe_client, create_params).await {
@@ -125,6 +125,42 @@ async fn get_location_id_handler()-> impl  Responder {
     match env::var("LOCATION_ID") {
         Ok(location_id) => ApiResponse::success(serde_json::json!({ "location_id": location_id })),
         Err(_) => ErrorResponse::new("Failed to load location ID", actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
+    }
+}
+
+//==========================================//
+//         Endpoint connection token        //
+//==========================================//
+async fn connection_token_handler(data: web::Data<Appstate>) -> impl Responder {
+    match TerminalConnectionToken::create(&data.stripe_client, CreateTerminalConnectionToken::default()).await {
+        Ok(token) => ApiResponse::success(serde_json::json!({ "secret": token.secret })),
+        Err(err) => ErrorResponse::new(&format!("Failed to create connection token: {err}"), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
+    }
+}
+
+//==========================================//
+//         Cancel reader action             //
+//==========================================//
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct CancelActionRequest {
+    reader_id: String,
+}
+
+async fn cancel_action(client: &Client, reader_id: &str, params: &CancelActionRequest) -> Result<TerminalReader, StripeError> {
+    let url = format!("/v1/terminal/readers/{}/cancel", reader_id);
+    client.post_form(&url, params).await
+}
+
+// GET /cancel-action
+// stripe terminal readers cancel action(readerId)
+async fn cancel_action_handler(data: web::Data<Appstate>, query: web::Json<CancelActionRequest>, ) -> impl Responder {
+    let reader_id = &query.reader_id;
+    let cancel_req = CancelActionRequest::default();
+
+    match cancel_action(&data.stripe_client, reader_id, &cancel_req).await {
+        Ok(reader) => ApiResponse::success(reader),
+        Err(err) => ErrorResponse::new( &format!("Failed to cancel action for reader `{reader_id}`: {err}"), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 
@@ -171,7 +207,9 @@ println!("Server starting on port 4242...");
             .route("/test", web::get().to(test_endpoint))
             .route("/create-payment-intent", web::post().to(create_payment_intent_handler))
             .route("/get-location-id", web::get().to(get_location_id_handler))
+            .route("/connection-token", web::post().to(connection_token_handler))
             .route("/get-recent-payment-intents", web::get().to(get_payment_intent_handler))
+            .route("/cancel-action", web::post().to(cancel_action_handler))
     })
         .bind(("127.0.0.1", 4242))?
         .run()
