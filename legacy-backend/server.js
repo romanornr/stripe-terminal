@@ -61,9 +61,52 @@ app.post('/cancel-latest-payment-intent', async (req, res) => {
         res.status(500).json({ error: 'Failed to cancel or retrieve the latest payment intent' });
     }
 });
+
+// cancel all payment intents
+app.post('/cancel-all-payment-intents', async (req, res) => {
+    try {
+        // Fetch the most recent Payment Intent
+        const paymentIntents = await stripe.paymentIntents.list({
+            limit: 10,
+        });
+
+        if (!paymentIntents.data || paymentIntents.data.length === 0) {
+            return res.status(404).json({error: 'No payment intents found'});
+        }
+
+        const listPaymentIntents = paymentIntents.data;
+
+        // cancel all payment intents from listPaymentIntents
+        for (let i = 0; i < listPaymentIntents.length; i++) {
+            const paymentIntent = listPaymentIntents[i];
+            try {
+                const canceledPaymentIntent = await stripe.paymentIntents.cancel(paymentIntent.id);
+                console.log('Payment intent canceled:', canceledPaymentIntent.id);
+            } catch (error) {
+                console.error('Error canceling payment intent:', error);
+            }
+        }
+
+        // curl request to cancel all payment intents
+        // curl -X POST https://localhost:4242/cancel-all-payment-intents -H "Content-Type: application/json" -d "{}"
+    } catch (error) {
+        console.error('Error canceling payment intents:', error);
+        res.status(500).json({error: 'Failed to cancel payment intents'});
+    }
+});
+
+app.post('/readers/cancel-action', async (req, res) => {
+    try {
+        const {reader_id} = req.body;
+        const readerState = await stripe.terminal.readers.cancelAction(reader_id);
+        res.send({ reader_state: readerState});
+    } catch (error) {
+        return res.status(400).send({ error: { message: error.message } });
+    }
+});
     
 
-app.post('/connection_token', async (req, res) => {
+app.post('/connection-token', async (req, res) => {
     try {
         const connectionToken = await stripe.terminal.connectionTokens.create();
         res.json({secret: connectionToken.secret});
