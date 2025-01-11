@@ -4,7 +4,7 @@ use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
-use stripe::{Client as StripeClient, Client, CreatePaymentIntent, Currency, ListPaymentIntents, PaymentIntent, PaymentIntentCaptureMethod, TerminalReader, StripeError, CreateTerminalConnectionToken, TerminalConnectionToken};
+use stripe::{Client as StripeClient, Client, CreatePaymentIntent, Currency, ListPaymentIntents, PaymentIntent, PaymentIntentCaptureMethod, TerminalReader, StripeError, CreateTerminalConnectionToken, TerminalConnectionToken, ListTerminalReaders, ListTerminalLocations, TerminalLocation};
 
 //======================//
 //   Shared App State   //
@@ -138,31 +138,92 @@ async fn connection_token_handler(data: web::Data<Appstate>) -> impl Responder {
     }
 }
 
+
+async fn get_reader_id_handler(data: web::Data<Appstate>) -> impl Responder {
+    let locations = TerminalLocation::list(&data.stripe_client, &ListTerminalLocations::new()).await;
+    match locations {
+        Ok(locations) => {
+            let location_id = env::var("LOCATION_ID")
+                .expect("LOCATION_ID must be in .env");
+
+            // Filter the entire list to find exactly the one matching location_id
+            let maybe_loc = locations.data.into_iter().find(|loc| loc.id.as_str() == location_id);
+
+            match maybe_loc {
+                Some(location) => ApiResponse::success(location.id),
+                None => ErrorResponse::new(&format!("No location found with ID {location_id}"), actix_web::http::StatusCode::NOT_FOUND
+                ),
+            }
+        }
+        Err(err) => ErrorResponse::new(&format!("Failed to list terminal locations: {err}"), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
 //==========================================//
 //         Cancel reader action             //
 //==========================================//
 
+// This struct is ust for Actix to deserialize the inbound JSON
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 struct CancelActionRequest {
     reader_id: String,
 }
 
-async fn cancel_action(client: &Client, reader_id: &str, params: &CancelActionRequest) -> Result<TerminalReader, StripeError> {
-    let url = format!("/v1/terminal/readers/{}/cancel", reader_id);
-    client.post_form(&url, params).await
+#[derive(Serialize)]
+struct CancelReaderActionResponse {
+    reader_state: TerminalReader
 }
+
+// This is the empty payload that we send to Stripe (no fields)
+#[derive(serde::Serialize, Default)]
+struct CancelActionStripeRequest;
+
+async fn cancel_action(client: &Client, reader_id: &str) -> Result<TerminalReader, StripeError> {
+    let url = format!("/terminal/readers/{reader_id}/cancel_action");
+    // Send an empty JSON body (no fields)
+    client.post_form(&url, &CancelActionStripeRequest::default()).await
+}
+
+async fn cancel_action_handler(data: web::Data<Appstate>, request_body: web::Json<CancelActionRequest>) -> impl Responder {
+    let reader_id = &request_body.reader_id;
+    match cancel_action(&data.stripe_client, reader_id).await {
+        Ok(updated_reader) => {
+            HttpResponse::Ok().json(CancelReaderActionResponse {
+                reader_state: updated_reader
+            })
+        }
+        Err(err) => ErrorResponse::new(&format!("Failed to cancel action for reader `{reader_id}`: {err}"), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
+    }
+}
+
+// async fn cancel_action(client: &Client, reader_id: &str, params: &CancelActionRequest) -> Result<TerminalReader, StripeError> {
+//     let url = format!("/terminal/readers/{}/cancel", reader_id);
+//     client.post_form(&url, params).await
+// }
+
+// async fn cancel_action(client: &Client, reader_id: &str, params: &CancelActionRequest, ) -> Result<TerminalReader, StripeError> {
+//     let url = format!("/terminal/readers/{reader_id}/cancel_action");
+//     client.post_form(&url, params).await
+// }
+//
 
 // GET /cancel-action
 // stripe terminal readers cancel action(readerId)
-async fn cancel_action_handler(data: web::Data<Appstate>, query: web::Json<CancelActionRequest>, ) -> impl Responder {
-    let reader_id = &query.reader_id;
-    let cancel_req = CancelActionRequest::default();
-
-    match cancel_action(&data.stripe_client, reader_id, &cancel_req).await {
-        Ok(reader) => ApiResponse::success(reader),
-        Err(err) => ErrorResponse::new( &format!("Failed to cancel action for reader `{reader_id}`: {err}"), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
-    }
-}
+// async fn cancel_action_handler(data: web::Data<Appstate>, query: web::Json<CancelActionRequest>, ) -> impl Responder {
+//     //let reader_id = &query.reader_id;
+//     //let cancel_req = CancelActionRequest::default();
+//
+//     match cancel_action(&data.stripe_client, reader_id).await {
+//         Ok(reader) => ApiResponse::success(reader),
+//         Err(err) => ErrorResponse::new( &format!("Failed to cancel action for reader `{reader_id}`: {err}"), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
+//     }
+//
+//     // match cancel_action(&data.stripe_client, reader_id, &cancel_req).await {
+//     //     Ok(reader) => ApiResponse::success(reader),
+//     //     Err(err) => ErrorResponse::new( &format!("Failed to cancel action for reader `{reader_id}`: {err}"), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
+//     // }
+// }
 
 //=====================//
 //   Main Entry Point  //
@@ -210,6 +271,7 @@ println!("Server starting on port 4242...");
             .route("/connection-token", web::post().to(connection_token_handler))
             .route("/get-recent-payment-intents", web::get().to(get_payment_intent_handler))
             .route("/cancel-action", web::post().to(cancel_action_handler))
+            .route("/readers/id", web::get().to(get_reader_id_handler))
     })
         .bind(("127.0.0.1", 4242))?
         .run()
